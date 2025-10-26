@@ -162,6 +162,8 @@ CREATE TABLE Log_Eventos (
 -- ============================================
 -- 				Triggers
 -- ============================================
+
+-- Trigger: Atualiza o saldo em Estoque_Produto após uma movimentação
 DELIMITER $$
 CREATE TRIGGER Att_estoque
 AFTER INSERT ON Movimentacao
@@ -183,6 +185,7 @@ BEGIN
 END$$
 DELIMITER ;
 
+-- Trigger: Impede uma saída caso o estoque vá ficar negativo
 DELIMITER $$
 CREATE TRIGGER estoque_negativo
 BEFORE INSERT ON Movimentacao
@@ -202,6 +205,7 @@ BEGIN
 END$$
 DELIMITER ;
 
+-- Trigger: Impede que um produto com saldo em estoque seja excluído
 DELIMITER $$
 CREATE TRIGGER safe_delete
 BEFORE DELETE ON Produto
@@ -221,6 +225,7 @@ BEGIN
 END$$
 DELIMITER ;
 
+-- Trigger: Gera log de auditoria para alterações na tabela Produto
 DELIMITER $$
 CREATE TRIGGER log_produto_update
 AFTER UPDATE ON Produto
@@ -245,8 +250,37 @@ END$$
 DELIMITER ;
 
 -- ============================================
+-- 	  *** NOVA TRIGGER ADICIONADA HOJE ***
+-- ============================================
+-- Trigger: Cria automaticamente o vínculo em Estoque_Produto na primeira movimentação
+DELIMITER $$
+CREATE TRIGGER trg_AutoCreate_EstoqueProduto
+BEFORE INSERT ON Movimentacao
+FOR EACH ROW
+BEGIN
+    DECLARE v_existe INT DEFAULT 0;
+
+    -- Verifica se o par (estoque, produto) já está cadastrado na tabela de saldos
+    SELECT COUNT(*) INTO v_existe
+    FROM Estoque_Produto
+    WHERE id_estoque = NEW.id_estoque AND id_produto = NEW.id_produto;
+
+    -- Se não existir (v_existe = 0), cria o vínculo
+    IF v_existe = 0 THEN
+        -- Insere a linha "zerada". 
+        -- A trigger Att_estoque (AFTER INSERT) vai atualizar o saldo corretamente.
+        INSERT INTO Estoque_Produto (id_estoque, id_produto, quantidade_atual, quantidade_minima)
+        VALUES (NEW.id_estoque, NEW.id_produto, 0, 0);
+    END IF;
+END$$
+DELIMITER ;
+
+
+-- ============================================
 -- 				Stored Procedures
 -- ============================================
+
+-- Procedure: Facilita o registro de uma nova movimentação
 DELIMITER $$
 CREATE PROCEDURE sp_RegistrarMovimentacao(
     IN p_id_estoque INT,
@@ -279,6 +313,7 @@ BEGIN
 END$$
 DELIMITER ;
 
+-- Procedure: Consulta o saldo de um produto em todos os estoques
 DELIMITER $$
 CREATE PROCEDURE sp_ConsultarEstoqueProduto(
     IN p_id_produto INT
@@ -300,6 +335,7 @@ BEGIN
 END$$
 DELIMITER ;
 
+-- Procedure: Gera um relatório de produtos abaixo do estoque mínimo
 DELIMITER $$
 CREATE PROCEDURE sp_VerificarEstoqueMinimo()
 BEGIN
@@ -316,3 +352,118 @@ BEGIN
     WHERE ep.quantidade_atual < ep.quantidade_minima;
 END$$
 DELIMITER ;
+
+-- ============================================
+-- 		 *** NOVA SEÇÃO DE VIEWS ***
+-- ============================================
+
+-- View: Relatório completo do inventário atual
+CREATE VIEW vw_EstoqueAtualDetalhado AS
+SELECT 
+    p.id_produto,
+    p.nome_produto,
+    p.unidade_medida,
+    p.ativo AS produto_ativo,
+    cp.nome_cat AS nome_categoria,
+    cp.sub_cat AS sub_categoria,
+    e.id_estoque,
+    e.nome AS nome_estoque,
+    s.nome_sala,
+    s.localizacao,
+    ep.quantidade_atual,
+    ep.quantidade_minima,
+    (ep.quantidade_atual - ep.quantidade_minima) AS balanco_vs_minimo
+FROM 
+    Estoque_Produto AS ep
+JOIN 
+    Produto AS p ON ep.id_produto = p.id_produto
+JOIN 
+    Estoque AS e ON ep.id_estoque = e.id_estoque
+JOIN 
+    Sala AS s ON e.id_sala = s.id_sala
+JOIN 
+    Categoria_Produto AS cp ON p.id_categoria = cp.id_categoria;
+
+
+-- View: Lista de compras (apenas itens abaixo do mínimo)
+CREATE VIEW vw_RelatorioEstoqueMinimo AS
+SELECT 
+    id_produto,
+    nome_produto,
+    nome_estoque,
+    nome_sala,
+    quantidade_atual,
+    quantidade_minima,
+    (quantidade_minima - quantidade_atual) AS quantidade_a_repor
+FROM 
+    vw_EstoqueAtualDetalhado
+WHERE 
+    quantidade_atual < quantidade_minima;
+
+
+-- View: Histórico de movimentações legível
+CREATE VIEW vw_HistoricoMovimentacoes AS
+SELECT 
+    m.id_mov,
+    m.data_mov,
+    m.tipo,
+    m.quantidade,
+    p.nome_produto,
+    e.nome AS nome_estoque,
+    u.nome AS nome_usuario,
+    m.observacao
+FROM 
+    Movimentacao AS m
+JOIN 
+    Produto AS p ON m.id_produto = p.id_produto
+JOIN 
+    Estoque AS e ON m.id_estoque = e.id_estoque
+LEFT JOIN 
+    Usuario AS u ON m.id_usuario = u.id_usuario
+ORDER BY
+    m.data_mov DESC;
+
+
+-- View: Catálogo de produtos por fornecedor
+CREATE VIEW vw_CatalogoFornecedores AS
+SELECT 
+    f.id_forn,
+    f.razao_social,
+    f.cnpj,
+    f.email AS email_fornecedor,
+    f.telefone AS telefone_fornecedor,
+    p.id_produto,
+    p.nome_produto,
+    fp.preco_custo,
+    fp.codigo_produto_fornecedor
+FROM 
+    Fornecedor_Produto AS fp
+JOIN 
+    Fornecedor AS f ON fp.id_forn = f.id_forn
+JOIN 
+    Produto AS p ON fp.id_produto = p.id_produto;
+
+
+-- View: Relatório detalhado de pedidos de compra e seus itens
+CREATE VIEW vw_PedidosCompraDetalhados AS
+SELECT 
+    pc.id_pedido,
+    pc.data_pedido,
+    pc.status AS status_pedido,
+    pc.valor_total AS valor_total_pedido,
+    f.razao_social AS fornecedor,
+    p.nome_produto,
+    pp.quantidade,
+    pp.valor_unitario AS valor_unitario_item,
+    (pp.quantidade * pp.valor_unitario) AS valor_total_item
+FROM 
+    Pedido_Compra AS pc
+JOIN 
+    Fornecedor AS f ON pc.id_forn = f.id_forn
+JOIN 
+    Pedido_Produto AS pp ON pc.id_pedido = pp.id_pedido
+JOIN 
+    Produto AS p ON pp.id_produto = p.id_produto
+ORDER BY
+    pc.id_pedido DESC,
+    p.nome_produto;
