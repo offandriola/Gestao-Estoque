@@ -3,7 +3,6 @@
 -- ============================================
 CREATE DATABASE IF NOT EXISTS gestao_estoque;
 USE gestao_estoque;
-
 -- ============================================
 -- 				Criando Tables
 -- ============================================
@@ -99,8 +98,8 @@ CREATE TABLE Pedido_Produto (
 CREATE TABLE Fornecedor_Produto (
   id_forn int UNSIGNED NOT NULL,
   id_produto int UNSIGNED NOT NULL,
-  preco_custo numeric(14,2),
-  codigo_produto_fornecedor varchar(50),
+  valor_unitario numeric(14,2) NOT NULL,
+  razao_social varchar(160) NOT NULL,
   PRIMARY KEY (id_forn, id_produto)
 );
 
@@ -434,8 +433,7 @@ SELECT
     f.telefone AS telefone_fornecedor,
     p.id_produto,
     p.nome_produto,
-    fp.preco_custo,
-    fp.codigo_produto_fornecedor
+    fp.valor_unitario
 FROM 
     Fornecedor_Produto AS fp
 JOIN 
